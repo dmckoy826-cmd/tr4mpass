@@ -1,9 +1,9 @@
 /*
- * path_b_identity.c -- DFU identity manipulation for A12+ devices.
+ * path_b_identity.c -- Identity manipulation for A12+ devices.
  *
- * Modifies the device serial string descriptor in DFU mode to append
- * the PWND:[checkm8] marker via USB control transfers. V1 uses correct
- * transfer structure; exact SRAM write offsets are TODO (hardware testing).
+ * Reads the serial descriptor in DFU or recovery and attempts to set a
+ * marked serial-number environment variable in recovery.  Setting that
+ * variable does not guarantee that the USB descriptor will change.
  */
 
 #include <string.h>
@@ -198,6 +198,7 @@ int path_b_read_serial(device_info_t *dev, char *buf, size_t len)
     {
         irecv_client_t client = NULL;
         irecv_error_t  err;
+        int mode = 0;
         const struct irecv_device_info *info;
 
         if (dev->ecid != 0)
@@ -209,6 +210,15 @@ int path_b_read_serial(device_info_t *dev, char *buf, size_t len)
         if (err != IRECV_E_SUCCESS || !client) {
             log_error("[path_b_id] iRecovery open failed for serial read: %s",
                       irecv_strerror(err));
+            return -1;
+        }
+
+        err = irecv_get_mode(client, &mode);
+        if (err != IRECV_E_SUCCESS ||
+            mode < IRECV_K_RECOVERY_MODE_1 || mode > IRECV_K_RECOVERY_MODE_4) {
+            log_error("[path_b_id] Device is not in recovery mode (mode=0x%04X, err=%s)",
+                      (unsigned)mode, irecv_strerror(err));
+            irecv_close(client);
             return -1;
         }
 
@@ -231,9 +241,9 @@ int path_b_read_serial(device_info_t *dev, char *buf, size_t len)
  * path_b_write_serial_irecovery -- Set serial-number env var in recovery mode.
  *
  * Apple's A12+ BootROM rejects SET_DESCRIPTOR with LIBUSB_ERROR_PIPE.
- * Instead, this function uses libirecovery to send "setenv serial-number"
- * from recovery mode (PID 0x1281), which iBoot accepts before booting iOS.
- * The PWND marker in the serial is then visible to mobileactivationd.
+ * Instead, this function attempts "setenv serial-number" through
+ * libirecovery. Acceptance of this command does not establish that the
+ * USB descriptor or mobileactivationd will see the modified value.
  *
  * Device must already be in recovery mode before this is called.
  * path_b.c:step_reboot_to_recovery() handles the DFU -> recovery transition.
@@ -333,7 +343,10 @@ int path_b_manipulate_identity(device_info_t *dev)
         return -1;
     }
 
-    if (!dev->usb) {
+    /* The DFU handle is closed during the transition to recovery.  A
+     * missing handle is expected there; path_b_read_serial() will use
+     * libirecovery instead.  It is only an error while still in DFU. */
+    if (dev->is_dfu_mode && !dev->usb) {
         log_error("[path_b_id] No USB handle for DFU mode");
         return -1;
     }
@@ -373,9 +386,8 @@ int path_b_manipulate_identity(device_info_t *dev)
     log_info("[path_b_id] Verifying serial descriptor...");
     rc = path_b_read_serial(dev, verify, sizeof(verify));
     if (rc != 0) {
-        log_warn("[path_b_id] Could not verify serial (read-back failed)");
-        /* Non-fatal: write may have succeeded even if re-read fails. */
-        return 0;
+        log_error("[path_b_id] Could not verify serial (read-back failed); write may have taken effect");
+        return -1;
     }
 
     if (strstr(verify, "PWND:") == NULL) {

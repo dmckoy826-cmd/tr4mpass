@@ -47,6 +47,8 @@ irecv_error_t irecv_open_with_ecid(irecv_client_t *client, uint64_t ecid)
         irecv_open_error_slot_t *s = &g_irecv_open_error_slots[i];
         if (s->in_use && !s->consumed) {
             s->consumed = 1;
+            if (s->error_code == 0)
+                break; /* staged success: create a client below */
             *client = NULL;
             return (irecv_error_t)s->error_code;
         }

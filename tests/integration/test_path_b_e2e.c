@@ -1,13 +1,10 @@
 /*
  * test_path_b_e2e.c -- End-to-end Path B (A12+) pipeline tests.
  *
- * Two boundaries matter for Path B.  First, identity manipulation (DFU
- * read + recovery setenv) is expected to work on real hardware -- iBoot
- * accepts the PWND marker.  Second, activation itself is blocked by the
- * SEP nonce barrier documented in 26.3-vulnerability.md; FairPlayKeyData,
- * RKCData, and SepNonce are sealed by the Secure Enclave.  The tool's
- * honest behaviour on real A12+ hardware is a clean failure at
- * mobileactivation_activate_with_session().
+ * These tests simulate identity manipulation and activation.  Mocked
+ * setenv and descriptor responses do not establish that iBoot accepts
+ * the marker or that a real device exposes it after a write. Activation
+ * also faces the SEP nonce barrier discussed in 26.3-vulnerability.md.
  *
  * These tests therefore assert:
  *   - path_b_manipulate_identity() writes the PWND marker successfully,
@@ -128,6 +125,87 @@ test_path_b_e2e_identity_manipulation_succeeds(void)
     ASSERT_EQ(found_saveenv, 1);
 }
 
+/* The real orchestration closes the DFU handle before this step.  The
+ * recovery descriptor in the mock does not change just because setenv
+ * succeeds, so an unchanged read-back must still fail verification. */
+static void
+test_path_b_identity_recovery_without_dfu_handle(void)
+{
+    device_info_t dev;
+    const char *serial = "CPID:8020 CPRV:11 ECID:0022334455667788";
+
+    printf("  [e2e] path_b recovery identity without DFU handle\n");
+    mock_reset_all();
+    dev = e2e_make_device_path_b_cellular();
+    dev.is_dfu_mode = 0;
+    dev.usb = NULL;
+    mock_irecv_set_device_info(0x1281, dev.ecid, serial);
+
+    ASSERT_EQ(path_b_manipulate_identity(&dev), -1);
+    ASSERT_EQ(mock_call_log_contains("irecv_get_device_info"), 1);
+    ASSERT_EQ(mock_call_log_contains("irecv_setenv(serial-number="), 1);
+    ASSERT_EQ(mock_call_log_contains("PWND:[checkm8]"), 1);
+    ASSERT_EQ(mock_call_log_contains("irecv_saveenv"), 1);
+}
+
+static void
+test_path_b_identity_recovery_error_paths(void)
+{
+    device_info_t dev;
+    const char *serial = "CPID:8020 CPRV:11 ECID:0022334455667788";
+
+    printf("  [e2e] path_b recovery identity error paths\n");
+    mock_reset_all();
+    dev = e2e_make_device_path_b_cellular();
+    dev.is_dfu_mode = 0;
+    dev.usb = NULL;
+    mock_irecv_set_open_error(-1);
+    ASSERT_EQ(path_b_manipulate_identity(&dev), -1);
+    ASSERT_EQ(mock_call_log_contains("irecv_setenv"), 0);
+
+    mock_reset_all();
+    mock_irecv_set_device_info(0x1227, dev.ecid, serial);
+    ASSERT_EQ(path_b_manipulate_identity(&dev), -1);
+    ASSERT_EQ(mock_call_log_contains("irecv_setenv"), 0);
+
+    mock_reset_all();
+    mock_irecv_set_device_info(0x1281, dev.ecid, serial);
+    mock_irecv_set_setenv_result("serial-number", -1);
+    ASSERT_EQ(path_b_manipulate_identity(&dev), -1);
+    ASSERT_EQ(mock_call_log_contains("irecv_setenv(serial-number="), 1);
+    ASSERT_EQ(mock_call_log_contains("irecv_saveenv"), 0);
+
+    /* Initial read and write succeed, but reopening for verification fails. */
+    mock_reset_all();
+    mock_irecv_set_device_info(0x1281, dev.ecid, serial);
+    mock_irecv_queue_open_error(0);
+    mock_irecv_queue_open_error(0);
+    mock_irecv_queue_open_error(-1);
+    ASSERT_EQ(path_b_manipulate_identity(&dev), -1);
+    ASSERT_EQ(mock_call_log_contains("irecv_saveenv"), 1);
+
+    mock_reset_all();
+    dev.is_dfu_mode = 1;
+    ASSERT_EQ(path_b_manipulate_identity(&dev), -1);
+    ASSERT_EQ(mock_call_log_contains("irecv_open_with_ecid"), 0);
+}
+
+static void
+test_path_b_identity_recovery_already_marked(void)
+{
+    device_info_t dev;
+
+    printf("  [e2e] path_b recovery identity already marked\n");
+    mock_reset_all();
+    dev = e2e_make_device_path_b_cellular();
+    dev.is_dfu_mode = 0;
+    dev.usb = NULL;
+    mock_irecv_set_device_info(0x1281, dev.ecid,
+                               "CPID:8020 ECID:0022334455667788 PWND:[checkm8]");
+    ASSERT_EQ(path_b_manipulate_identity(&dev), 0);
+    ASSERT_EQ(mock_call_log_contains("irecv_setenv"), 0);
+}
+
 /*
  * SEP nonce barrier: simulate mobileactivation rejecting the activation
  * record, then drive the activation half of Path B directly and check
@@ -220,6 +298,9 @@ run_path_b_integration_tests(void)
 {
     printf("--- Section 11: Path B end-to-end integration ---\n");
     test_path_b_e2e_identity_manipulation_succeeds();
+    test_path_b_identity_recovery_without_dfu_handle();
+    test_path_b_identity_recovery_error_paths();
+    test_path_b_identity_recovery_already_marked();
     test_path_b_e2e_activation_rejected_by_nonce_barrier();
     test_path_b_e2e_signal_detection_cellular_vs_wifi();
 }
