@@ -123,9 +123,9 @@ void mock_irecv_set_device_info(uint32_t pid, uint64_t ecid,
 void mock_irecv_set_open_error(int error_code);
 
 /*
- * Push one more staged open error onto an 8-slot FIFO.  Each call to
- * irecv_open_with_ecid consumes one slot (or returns success if the FIFO
- * is empty and no sticky flag is set).
+ * Push one staged open result onto an 8-slot FIFO.  Zero stages success;
+ * nonzero stages an error. Each call to irecv_open_with_ecid consumes
+ * one slot (or returns success if the FIFO is empty and no sticky flag is set).
  */
 void mock_irecv_queue_open_error(int error_code);
 

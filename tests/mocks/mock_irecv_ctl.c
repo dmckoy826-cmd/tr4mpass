@@ -112,15 +112,13 @@ void mock_irecv_set_open_error(int error_code)
 }
 
 /*
- * mock_irecv_queue_open_error -- push one more staged open error onto
- * the FIFO.  Each irecv_open_with_ecid call consumes one slot; once the
+ * mock_irecv_queue_open_error -- push a staged open result (zero means
+ * success) onto the FIFO. Each irecv_open_with_ecid call consumes one slot; once the
  * FIFO is empty the call succeeds normally.
  */
 void mock_irecv_queue_open_error(int error_code)
 {
     int i;
-    if (error_code == 0)
-        return;
     for (i = 0; i < IRECV_OPEN_ERROR_SLOTS; i++) {
         if (!g_irecv_open_error_slots[i].in_use) {
             g_irecv_open_error_slots[i].error_code = error_code;

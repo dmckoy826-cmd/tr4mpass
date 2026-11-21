@@ -16,16 +16,15 @@
 extern const bypass_module_t path_b_module;
 
 /*
- * path_b_manipulate_identity -- Modify device serial descriptors in DFU.
- * Appends PWND:[checkm8] marker to the device serial string via USB
- * control transfers to the DFU interface. Required before session
- * activation on A12+ devices.
- * Returns 0 on success, -1 on error.
+ * path_b_manipulate_identity -- Read the device serial and attempt to append
+ * a PWND:[checkm8] marker using recovery-mode iRecovery setenv.  A DFU
+ * handle is not required after the transition to recovery.  The write may
+ * persist even if verification fails. Returns 0 on success, -1 on error.
  */
 int path_b_manipulate_identity(device_info_t *dev);
 
 /*
- * path_b_read_serial -- Read current serial descriptor from DFU mode.
+ * path_b_read_serial -- Read current serial descriptor from DFU or recovery.
  * Copies the serial string into buf (up to len bytes including NUL).
  * Returns 0 on success, -1 on error.
  */
