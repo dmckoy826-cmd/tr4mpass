@@ -194,6 +194,7 @@ irecv_error_t irecv_setenv(irecv_client_t client, const char *variable,
                            const char *value)
 {
     int i;
+    int err = g_irecv_setenv_default_error;
     (void)client;
     mock_log_append("irecv_setenv(%s=%s)",
                     variable ? variable : "(null)",
@@ -203,11 +204,40 @@ irecv_error_t irecv_setenv(irecv_client_t client, const char *variable,
         for (i = 0; i < MOCK_SETENV_SLOTS; i++) {
             if (g_irecv_setenv_results[i].in_use &&
                 strcmp(g_irecv_setenv_results[i].var, variable) == 0) {
-                return (irecv_error_t)g_irecv_setenv_results[i].error;
+                err = g_irecv_setenv_results[i].error;
+                break;
             }
         }
     }
-    return (irecv_error_t)g_irecv_setenv_default_error;
+    if (err == 0 && variable && value) {
+        /* Store on success so a later getenv observes it.  The mock
+         * descriptor (g_irecv_info_serial) is intentionally NOT
+         * updated -- setenv does not change the descriptor. */
+        int slot = -1;
+        for (i = 0; i < MOCK_ENV_SLOTS; i++) {
+            if (g_irecv_env[i].in_use &&
+                strcmp(g_irecv_env[i].var, variable) == 0) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            for (i = 0; i < MOCK_ENV_SLOTS; i++) {
+                if (!g_irecv_env[i].in_use) {
+                    slot = i;
+                    break;
+                }
+            }
+        }
+        if (slot >= 0 && !g_irecv_env[slot].pinned) {
+            snprintf(g_irecv_env[slot].var, sizeof(g_irecv_env[slot].var),
+                     "%s", variable);
+            snprintf(g_irecv_env[slot].value,
+                     sizeof(g_irecv_env[slot].value), "%s", value);
+            g_irecv_env[slot].in_use = 1;
+        }
+    }
+    return (irecv_error_t)err;
 }
 
 irecv_error_t irecv_setenv_np(irecv_client_t client, const char *variable,
@@ -219,10 +249,27 @@ irecv_error_t irecv_setenv_np(irecv_client_t client, const char *variable,
 irecv_error_t irecv_getenv(irecv_client_t client, const char *variable,
                            char **value)
 {
+    int i;
     (void)client;
     mock_log_append("irecv_getenv(%s)", variable ? variable : "(null)");
-    if (value)
-        *value = strdup("mockvalue");
+    if (!value)
+        return (irecv_error_t)-1;
+    *value = NULL;
+    if (variable) {
+        for (i = 0; i < MOCK_ENV_SLOTS; i++) {
+            if (g_irecv_env[i].in_use &&
+                strcmp(g_irecv_env[i].var, variable) == 0) {
+                if (g_irecv_env[i].getenv_error_set &&
+                    g_irecv_env[i].getenv_error != 0)
+                    return (irecv_error_t)g_irecv_env[i].getenv_error;
+                *value = strdup(g_irecv_env[i].value);
+                return (irecv_error_t)0;
+            }
+        }
+    }
+    /* Unset variable: empty string, mirroring a successful getenv
+     * with no value. */
+    *value = strdup("");
     return (irecv_error_t)0;
 }
 

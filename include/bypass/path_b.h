@@ -18,8 +18,11 @@ extern const bypass_module_t path_b_module;
 /*
  * path_b_manipulate_identity -- Read the device serial and attempt to append
  * a PWND:[checkm8] marker using recovery-mode iRecovery setenv.  A DFU
- * handle is not required after the transition to recovery.  The write may
- * persist even if verification fails. Returns 0 on success, -1 on error.
+ * handle is not required after the transition to recovery.  Success
+ * requires the USB descriptor read-back to contain the marker; an
+ * env-var read-back is logged as a diagnostic only and is not treated
+ * as descriptor success.  The write may persist even if verification
+ * fails. Returns 0 on success, -1 on error.
  */
 int path_b_manipulate_identity(device_info_t *dev);
 

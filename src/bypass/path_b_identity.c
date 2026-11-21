@@ -2,8 +2,18 @@
  * path_b_identity.c -- Identity manipulation for A12+ devices.
  *
  * Reads the serial descriptor in DFU or recovery and attempts to set a
- * marked serial-number environment variable in recovery.  Setting that
- * variable does not guarantee that the USB descriptor will change.
+ * marked serial-number environment variable in recovery.
+ *
+ * Investigation note (2026-11-21): the write path (irecv_setenv
+ * "serial-number") and the verify path (irecv_get_device_info) use
+ * different stores.  Per libirecovery, serial_string is populated at
+ * irecv_open time from the USB string descriptor, while setenv sends
+ * an iBoot "setenv" command.  There is no evidence that changing the
+ * env var changes the descriptor, and on-device logs show setenv +
+ * saveenv succeeding while the descriptor read-back stays unchanged.
+ * Verification therefore stays on the descriptor, and an env-var
+ * read-back is logged as a diagnostic only -- it must not be treated
+ * as proof that the descriptor changed.
  */
 
 #include <string.h>
@@ -238,12 +248,52 @@ int path_b_read_serial(device_info_t *dev, char *buf, size_t len)
 }
 
 /*
+ * path_b_log_env_serial_number -- Read back and log the serial-number env var.
+ *
+ * Diagnostic helper only: irecv_getenv() queries the iBoot environment
+ * store over control transfer 0x40/0xC0, while path_b_read_serial()
+ * reads the USB string descriptor.  Comparing the two distinguishes
+ * "iBoot stored the env var, but the USB descriptor did not change"
+ * from "setenv did not take effect in iBoot".  Failures here are
+ * non-fatal and success here must never be treated as descriptor
+ * verification.
+ */
+static void path_b_log_env_serial_number(irecv_client_t client)
+{
+    irecv_error_t err;
+    char         *value = NULL;
+
+    if (!client)
+        return;
+
+    err = irecv_getenv(client, "serial-number", &value);
+    if (err != IRECV_E_SUCCESS || !value) {
+        log_warn("[path_b_id] Could not read back serial-number env var "
+                 "(diagnostic only: %s)", irecv_strerror(err));
+        free(value);
+        return;
+    }
+
+    log_info("[path_b_id] serial-number env var after write: %s", value);
+    if (strstr(value, "PWND:") != NULL)
+        log_info("[path_b_id] Env var contains PWND marker "
+                 "(descriptor still needs verification)");
+    else
+        log_warn("[path_b_id] Env var does not contain PWND marker; "
+                 "setenv may not have taken effect");
+
+    free(value);
+}
+
+/*
  * path_b_write_serial_irecovery -- Set serial-number env var in recovery mode.
  *
  * Apple's A12+ BootROM rejects SET_DESCRIPTOR with LIBUSB_ERROR_PIPE.
  * Instead, this function attempts "setenv serial-number" through
- * libirecovery. Acceptance of this command does not establish that the
- * USB descriptor or mobileactivationd will see the modified value.
+ * libirecovery.  irecv_setenv() success only means the USB control
+ * transfer was accepted; it does not prove iBoot stored the value,
+ * and it does not establish that the USB descriptor or
+ * mobileactivationd will see the modified value.
  *
  * Device must already be in recovery mode before this is called.
  * path_b.c:step_reboot_to_recovery() handles the DFU -> recovery transition.
@@ -303,6 +353,11 @@ int path_b_write_serial_irecovery(device_info_t *dev, const char *new_serial)
                  irecv_strerror(err));
     else
         log_info("[path_b_id] Serial persisted to NVRAM via saveenv");
+
+    /* Diagnostic only: query iBoot's env store on the same recovery
+     * session to confirm whether serial-number was stored.  Does not
+     * establish that the USB descriptor changed. */
+    path_b_log_env_serial_number(client);
 
     (void)cmd; /* cmd buffer no longer needed -- keeping for future use */
 
@@ -382,7 +437,10 @@ int path_b_manipulate_identity(device_info_t *dev)
         return -1;
     }
 
-    /* Step 5: verify by reading back */
+    /* Step 5: verify by reading back the USB descriptor.
+     * Note: path_b_write_serial() logs an env-var read-back via
+     * irecv_getenv("serial-number") as a diagnostic, but verification
+     * deliberately checks the USB descriptor rather than the env var. */
     log_info("[path_b_id] Verifying serial descriptor...");
     rc = path_b_read_serial(dev, verify, sizeof(verify));
     if (rc != 0) {
@@ -391,8 +449,9 @@ int path_b_manipulate_identity(device_info_t *dev)
     }
 
     if (strstr(verify, "PWND:") == NULL) {
-        log_error("[path_b_id] Verification failed: PWND marker not found");
+        log_error("[path_b_id] Verification failed: PWND marker not found in USB descriptor");
         log_error("[path_b_id] Read-back serial: %s", verify);
+        log_error("[path_b_id] setenv/saveenv success does not establish a descriptor change; see env var diagnostic above");
         return -1;
     }
 

@@ -104,8 +104,21 @@ void mock_irecv_expect_file_upload(size_t *bytes_sent_out);
 /*
  * Configure the return value of irecv_setenv for a specific variable
  * name (exact match).  Call with var=NULL to set the default.
+ * A successful setenv also stores the value for later irecv_getenv.
  */
 void mock_irecv_set_setenv_result(const char *var, int error_code);
+
+/*
+ * Pin the value returned by irecv_getenv(var), even across subsequent
+ * irecv_setenv(var, ...) calls (until mock_reset_all).  The mock USB
+ * descriptor is unaffected.
+ */
+void mock_irecv_set_getenv_value(const char *var, const char *value);
+
+/*
+ * Force irecv_getenv(var) to return error_code.  Pass 0 to clear.
+ */
+void mock_irecv_set_getenv_error(const char *var, int error_code);
 
 /*
  * Configure the synthetic irecv_device_info returned by
