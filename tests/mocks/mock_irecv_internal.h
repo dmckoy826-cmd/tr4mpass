@@ -28,6 +28,23 @@ typedef struct {
     int  in_use;
 } mock_irecv_setenv_result_t;
 
+/* Env-var store backing irecv_setenv/irecv_getenv.  A successful setenv
+ * stores the value; getenv returns the stored copy (or empty string).
+ * This lets tests distinguish "env var stored" from "descriptor
+ * changed" -- the mock descriptor (g_irecv_info_serial) never changes
+ * on setenv, mirroring libirecovery where serial_string comes from
+ * the USB descriptor at open time. */
+#define MOCK_ENV_SLOTS 16
+
+typedef struct {
+    char var[64];
+    char value[256];
+    int  in_use;
+    int  pinned;
+    int  getenv_error;
+    int  getenv_error_set;
+} mock_irecv_env_t;
+
 /* Phase 3: per-path staged errors for irecv_send_file().
  * Each slot matches via strstr() on the path argument; the first unconsumed
  * match wins and the slot is marked consumed. */
@@ -55,6 +72,7 @@ extern int       g_irecv_cmd_expect_active;
 extern size_t   *g_irecv_file_upload_bytes_out;
 extern int       g_irecv_file_upload_active;
 extern mock_irecv_setenv_result_t g_irecv_setenv_results[MOCK_SETENV_SLOTS];
+extern mock_irecv_env_t g_irecv_env[MOCK_ENV_SLOTS];
 extern int       g_irecv_setenv_default_error;
 extern int       g_irecv_open_error;   /* backwards-compat sticky flag */
 extern irecv_open_error_slot_t g_irecv_open_error_slots[IRECV_OPEN_ERROR_SLOTS];

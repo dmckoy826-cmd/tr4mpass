@@ -13,6 +13,7 @@ int       g_irecv_cmd_expect_active;
 size_t   *g_irecv_file_upload_bytes_out;
 int       g_irecv_file_upload_active;
 mock_irecv_setenv_result_t g_irecv_setenv_results[MOCK_SETENV_SLOTS];
+mock_irecv_env_t g_irecv_env[MOCK_ENV_SLOTS];
 int       g_irecv_setenv_default_error;
 int       g_irecv_open_error;
 irecv_open_error_slot_t    g_irecv_open_error_slots[IRECV_OPEN_ERROR_SLOTS];
@@ -32,6 +33,8 @@ void mock_irecv_reset(void)
     for (i = 0; i < MOCK_SETENV_SLOTS; i++)
         memset(&g_irecv_setenv_results[i], 0,
                sizeof(g_irecv_setenv_results[i]));
+    for (i = 0; i < MOCK_ENV_SLOTS; i++)
+        memset(&g_irecv_env[i], 0, sizeof(g_irecv_env[i]));
     g_irecv_setenv_default_error = 0;
     g_irecv_open_error           = 0;
     for (i = 0; i < IRECV_OPEN_ERROR_SLOTS; i++)
@@ -88,6 +91,69 @@ void mock_irecv_set_device_info(uint32_t pid, uint64_t ecid,
     g_irecv_info_ecid = ecid;
     snprintf(g_irecv_info_serial, sizeof(g_irecv_info_serial), "%s",
              serial_string ? serial_string : "");
+}
+
+/*
+ * mock_irecv_set_getenv_value -- pin the env var value returned by
+ * irecv_getenv(var), even across subsequent irecv_setenv(var, ...) calls.
+ * Used to model an env var that already existed or did not take a new
+ * value despite the USB control transfer succeeding.
+ */
+void mock_irecv_set_getenv_value(const char *var, const char *value)
+{
+    int i;
+    if (!var)
+        return;
+    for (i = 0; i < MOCK_ENV_SLOTS; i++) {
+        if (g_irecv_env[i].in_use &&
+            strcmp(g_irecv_env[i].var, var) == 0) {
+            snprintf(g_irecv_env[i].value, sizeof(g_irecv_env[i].value),
+                     "%s", value ? value : "");
+            g_irecv_env[i].pinned = 1;
+            return;
+        }
+    }
+    for (i = 0; i < MOCK_ENV_SLOTS; i++) {
+        if (!g_irecv_env[i].in_use) {
+            snprintf(g_irecv_env[i].var, sizeof(g_irecv_env[i].var),
+                     "%s", var);
+            snprintf(g_irecv_env[i].value, sizeof(g_irecv_env[i].value),
+                     "%s", value ? value : "");
+            g_irecv_env[i].in_use = 1;
+            g_irecv_env[i].pinned = 1;
+            return;
+        }
+    }
+}
+
+/*
+ * mock_irecv_set_getenv_error -- force irecv_getenv(var) to return
+ * error_code.  Pass 0 to clear.
+ */
+void mock_irecv_set_getenv_error(const char *var, int error_code)
+{
+    int i;
+    if (!var)
+        return;
+    for (i = 0; i < MOCK_ENV_SLOTS; i++) {
+        if (g_irecv_env[i].in_use &&
+            strcmp(g_irecv_env[i].var, var) == 0) {
+            g_irecv_env[i].getenv_error = error_code;
+            g_irecv_env[i].getenv_error_set = 1;
+            return;
+        }
+    }
+    for (i = 0; i < MOCK_ENV_SLOTS; i++) {
+        if (!g_irecv_env[i].in_use) {
+            snprintf(g_irecv_env[i].var, sizeof(g_irecv_env[i].var),
+                     "%s", var);
+            g_irecv_env[i].value[0] = '\0';
+            g_irecv_env[i].in_use = 1;
+            g_irecv_env[i].getenv_error = error_code;
+            g_irecv_env[i].getenv_error_set = 1;
+            return;
+        }
+    }
 }
 
 /*

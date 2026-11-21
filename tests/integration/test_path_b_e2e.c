@@ -127,7 +127,9 @@ test_path_b_e2e_identity_manipulation_succeeds(void)
 
 /* The real orchestration closes the DFU handle before this step.  The
  * recovery descriptor in the mock does not change just because setenv
- * succeeds, so an unchanged read-back must still fail verification. */
+ * succeeds (even though irecv_getenv("serial-number") now reflects the
+ * stored env var), so an unchanged descriptor read-back must still fail
+ * verification. */
 static void
 test_path_b_identity_recovery_without_dfu_handle(void)
 {
@@ -146,6 +148,54 @@ test_path_b_identity_recovery_without_dfu_handle(void)
     ASSERT_EQ(mock_call_log_contains("irecv_setenv(serial-number="), 1);
     ASSERT_EQ(mock_call_log_contains("PWND:[checkm8]"), 1);
     ASSERT_EQ(mock_call_log_contains("irecv_saveenv"), 1);
+    ASSERT_EQ(mock_call_log_contains("irecv_getenv(serial-number)"), 1);
+}
+
+/* Even if iBoot's serial-number env var contains PWND:[checkm8] (either
+ * stored by setenv or pre-pinned), verification must check the USB
+ * descriptor and must not report success when the descriptor lacks PWND:.
+ * Also verify that an ignored setenv (env var stays empty) and an
+ * irecv_getenv error are handled cleanly as diagnostics. */
+static void
+test_path_b_identity_env_diagnostic_vs_descriptor(void)
+{
+    device_info_t dev;
+    const char *serial = "SDOM:01 CPID:8110 CPRV:11 ECID:0022334455667788 SRNM:[MOCKSRNM]";
+
+    printf("  [e2e] path_b env var diagnostic vs USB descriptor\n");
+
+    /* Case 1: env var has PWND marker, USB descriptor does not -> must fail. */
+    mock_reset_all();
+    dev = e2e_make_device_path_b_cellular();
+    dev.is_dfu_mode = 0;
+    dev.usb = NULL;
+    mock_irecv_set_device_info(0x1281, dev.ecid, serial);
+    mock_irecv_set_getenv_value("serial-number",
+                                "SDOM:01 CPID:8110 ECID:0022334455667788 PWND:[checkm8]");
+    ASSERT_EQ(path_b_manipulate_identity(&dev), -1);
+    ASSERT_EQ(mock_call_log_contains("irecv_getenv(serial-number)"), 1);
+
+    /* Case 2: setenv USB transfer succeeds, but iBoot does not store the
+     * variable (env var remains empty) and descriptor is unchanged -> fails. */
+    mock_reset_all();
+    dev = e2e_make_device_path_b_cellular();
+    dev.is_dfu_mode = 0;
+    dev.usb = NULL;
+    mock_irecv_set_device_info(0x1281, dev.ecid, serial);
+    mock_irecv_set_getenv_value("serial-number", "");
+    ASSERT_EQ(path_b_manipulate_identity(&dev), -1);
+    ASSERT_EQ(mock_call_log_contains("irecv_getenv(serial-number)"), 1);
+
+    /* Case 3: irecv_getenv fails, but staged USB descriptor read-back
+     * contains PWND -> diagnostic getenv error must not fail the step. */
+    mock_reset_all();
+    dev = e2e_make_device_path_b_cellular();
+    dev.usb = fake_usb_handle();
+    mock_irecv_set_device_info(0x1281, dev.ecid, serial);
+    mock_irecv_set_getenv_error("serial-number", -1);
+    stage_usb_serial_descriptor(serial);
+    ASSERT_EQ(path_b_manipulate_identity(&dev), 0);
+    ASSERT_EQ(mock_call_log_contains("irecv_getenv(serial-number)"), 1);
 }
 
 static void
@@ -299,6 +349,7 @@ run_path_b_integration_tests(void)
     printf("--- Section 11: Path B end-to-end integration ---\n");
     test_path_b_e2e_identity_manipulation_succeeds();
     test_path_b_identity_recovery_without_dfu_handle();
+    test_path_b_identity_env_diagnostic_vs_descriptor();
     test_path_b_identity_recovery_error_paths();
     test_path_b_identity_recovery_already_marked();
     test_path_b_e2e_activation_rejected_by_nonce_barrier();
